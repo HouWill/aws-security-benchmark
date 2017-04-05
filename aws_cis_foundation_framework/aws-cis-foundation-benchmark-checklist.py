@@ -21,6 +21,7 @@ import sys
 import re
 import tempfile
 import getopt
+import os
 from datetime import datetime
 import boto3
 
@@ -787,6 +788,7 @@ def control_1_24_no_overly_permissive_policies():
             if 'Action' in n.keys() and n['Effect'] == 'Allow':
                 if ("'*'" in str(n['Action']) or str(n['Action']) == "*") and ("'*'" in str(n['Resource']) or str(n['Resource']) == "*"):
                     failReason = "Found full administrative policy"
+                    result = False
                     offenders.append(str(m['Arn']))
     return {'Result': result, 'failReason': failReason, 'Offenders': offenders, 'ScoredControl': scored, 'Description': description, 'ControlId': control}
 
@@ -2115,13 +2117,15 @@ def s3report(htmlReport, account):
         reportName = "cis_report_" + str(account) + "_" + str(datetime.now().strftime('%Y%m%d_%H%M')) + ".html"
     else:
         reportName = "cis_report.html"
-    with tempfile.NamedTemporaryFile() as f:
+    with tempfile.NamedTemporaryFile(delete=False) as f:
         for item in htmlReport:
             f.write(item)
             f.flush()
         try:
+            f.close()
             S3_CLIENT.upload_file(f.name, S3_WEB_REPORT_BUCKET, reportName)
-        except Exception, e:
+            os.unlink(f.name)
+        except Exception as e:
             return "Failed to upload report to S3 because: " + str(e)
     ttl = int(S3_WEB_REPORT_EXPIRE) * 60
     signedURL = S3_CLIENT.generate_presigned_url(
