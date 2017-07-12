@@ -189,7 +189,7 @@ def control_1_3_unused_credentials(credreport):
     for i in range(len(credreport)):
         if credreport[i]['password_enabled'] == "true":
             try:
-                delta = datetime.strptime(now, frm) - datetime.strptime(credreport[i]['password_last_used_date'], frm)
+                delta = datetime.strptime(now, frm) - datetime.strptime(credreport[i]['password_last_used'], frm)
                 # Verify password have been used in the last 90 days
                 if delta.days > 90:
                     result = False
@@ -787,8 +787,8 @@ def control_1_24_no_overly_permissive_policies():
             # a policy statement has to contain either an Action or a NotAction
             if 'Action' in n.keys() and n['Effect'] == 'Allow':
                 if ("'*'" in str(n['Action']) or str(n['Action']) == "*") and ("'*'" in str(n['Resource']) or str(n['Resource']) == "*"):
-                    failReason = "Found full administrative policy"
                     result = False
+                    failReason = "Found full administrative policy"
                     offenders.append(str(m['Arn']))
     return {'Result': result, 'failReason': failReason, 'Offenders': offenders, 'ScoredControl': scored, 'Description': description, 'ControlId': control}
 
@@ -1341,7 +1341,7 @@ def control_3_6_ensure_log_metric_console_auth_failures(cloudtrails):
                         logGroupName=group
                     )
                     for p in filters['metricFilters']:
-                        ["\$\.eventName\s*=\s*\"?ConsoleLogin(\"|\)|\s)", "\$\.errorMessage\s*=\s*\\?\"?Failed authentication(\"|\)|\s)"]
+                        patterns = ["\$\.eventName\s*=\s*\"?ConsoleLogin(\"|\)|\s)", "\$\.errorMessage\s*=\s*\"?Failed authentication(\"|\)|\s)"]
                         if find_in_string(patterns, str(p['filterPattern'])):
                             cwclient = boto3.client('cloudwatch', region_name=m)
                             response = cwclient.describe_alarms_for_metric(
@@ -1384,7 +1384,7 @@ def control_3_7_ensure_log_metric_disabling_scheduled_delete_of_kms_cmk(cloudtra
                         logGroupName=group
                     )
                     for p in filters['metricFilters']:
-                        ["\$\.eventSource\s*=\s*\"?kms\.amazonaws\.com(\"|\)|\s)", "\$\.eventName\s*=\s*\"?DisableKey(\"|\)|\s)", "\$\.eventName\s*=\s*\"?ScheduleKeyDeletion(\"|\)|\s)"]
+                        patterns = ["\$\.eventSource\s*=\s*\"?kms\.amazonaws\.com(\"|\)|\s)", "\$\.eventName\s*=\s*\"?DisableKey(\"|\)|\s)", "\$\.eventName\s*=\s*\"?ScheduleKeyDeletion(\"|\)|\s)"]
                         if find_in_string(patterns, str(p['filterPattern'])):
                             cwclient = boto3.client('cloudwatch', region_name=m)
                             response = cwclient.describe_alarms_for_metric(
