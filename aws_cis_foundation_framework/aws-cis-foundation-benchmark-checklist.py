@@ -21,6 +21,7 @@ import sys
 import re
 import tempfile
 import getopt
+import os
 from datetime import datetime
 import boto3
 
@@ -188,7 +189,7 @@ def control_1_3_unused_credentials(credreport):
     for i in range(len(credreport)):
         if credreport[i]['password_enabled'] == "true":
             try:
-                delta = datetime.strptime(now, frm) - datetime.strptime(credreport[i]['password_last_used_date'], frm)
+                delta = datetime.strptime(now, frm) - datetime.strptime(credreport[i]['password_last_used'], frm)
                 # Verify password have been used in the last 90 days
                 if delta.days > 90:
                     result = False
@@ -709,12 +710,16 @@ def control_1_22_ensure_incident_management_roles():
     description = "Ensure a support role has been created to manage incidents with AWS Support"
     scored = True
     offenders = []
-    response = IAM_CLIENT.list_entities_for_policy(
-        PolicyArn='arn:aws:iam::aws:policy/AWSSupportAccess'
-    )
-    if (len(response['PolicyGroups']) + len(response['PolicyUsers']) + len(response['PolicyRoles'])) == 0:
+    try:
+        response = IAM_CLIENT.list_entities_for_policy(
+            PolicyArn='arn:aws:iam::aws:policy/AWSSupportAccess'
+        )
+        if (len(response['PolicyGroups']) + len(response['PolicyUsers']) + len(response['PolicyRoles'])) == 0:
+            result = False
+            failReason = "No user, group or role assigned AWSSupportAccess"
+    except:
         result = False
-        failReason = "No user, group or role assigned AWSSupportAccess"
+        failReason = "AWSSupportAccess policy not created"
     return {'Result': result, 'failReason': failReason, 'Offenders': offenders, 'ScoredControl': scored, 'Description': description, 'ControlId': control}
 
 
@@ -786,6 +791,7 @@ def control_1_24_no_overly_permissive_policies():
             # a policy statement has to contain either an Action or a NotAction
             if 'Action' in n.keys() and n['Effect'] == 'Allow':
                 if ("'*'" in str(n['Action']) or str(n['Action']) == "*") and ("'*'" in str(n['Resource']) or str(n['Resource']) == "*"):
+                    result = False
                     failReason = "Found full administrative policy"
                     offenders.append(str(m['Arn']))
     return {'Result': result, 'failReason': failReason, 'Offenders': offenders, 'ScoredControl': scored, 'Description': description, 'ControlId': control}
@@ -984,7 +990,7 @@ def control_2_5_ensure_config_all_regions(regions):
             if response['DeliveryChannelsStatus'][0]['configHistoryDeliveryInfo']['lastStatus'] != "SUCCESS":
                 result = False
                 failReason = "Config not enabled in all regions, not capturing all/global events or delivery channel errors"
-                offenders.append(str(n) + ":S3Delivery")
+                offenders.append(str(n) + ":S3orSNSDelivery")
         except:
             pass  # Will be captured by earlier rule
         try:
@@ -1339,7 +1345,7 @@ def control_3_6_ensure_log_metric_console_auth_failures(cloudtrails):
                         logGroupName=group
                     )
                     for p in filters['metricFilters']:
-                        ["\$\.eventName\s*=\s*\"?ConsoleLogin(\"|\)|\s)", "\$\.errorMessage\s*=\s*\\?\"?Failed authentication(\"|\)|\s)"]
+                        patterns = ["\$\.eventName\s*=\s*\"?ConsoleLogin(\"|\)|\s)", "\$\.errorMessage\s*=\s*\"?Failed authentication(\"|\)|\s)"]
                         if find_in_string(patterns, str(p['filterPattern'])):
                             cwclient = boto3.client('cloudwatch', region_name=m)
                             response = cwclient.describe_alarms_for_metric(
@@ -1382,7 +1388,7 @@ def control_3_7_ensure_log_metric_disabling_scheduled_delete_of_kms_cmk(cloudtra
                         logGroupName=group
                     )
                     for p in filters['metricFilters']:
-                        ["\$\.eventSource\s*=\s*\"?kms\.amazonaws\.com(\"|\)|\s)", "\$\.eventName\s*=\s*\"?DisableKey(\"|\)|\s)", "\$\.eventName\s*=\s*\"?ScheduleKeyDeletion(\"|\)|\s)"]
+                        patterns = ["\$\.eventSource\s*=\s*\"?kms\.amazonaws\.com(\"|\)|\s)", "\$\.eventName\s*=\s*\"?DisableKey(\"|\)|\s)", "\$\.eventName\s*=\s*\"?ScheduleKeyDeletion(\"|\)|\s)"]
                         if find_in_string(patterns, str(p['filterPattern'])):
                             cwclient = boto3.client('cloudwatch', region_name=m)
                             response = cwclient.describe_alarms_for_metric(
@@ -1940,6 +1946,18 @@ def get_cred_report():
     reader = csv.DictReader(response['Content'].splitlines(), delimiter=',')
     for row in reader:
         report.append(row)
+
+    # Verify if root key's never been used, if so add N/A
+    try:
+        if report[0]['access_key_1_last_used_date']:
+            pass
+    except:
+        report[0]['access_key_1_last_used_date'] = "N/A"
+    try:
+        if report[0]['access_key_2_last_used_date']:
+            pass
+    except:
+        report[0]['access_key_2_last_used_date'] = "N/A"
     return report
 
 
@@ -2115,13 +2133,15 @@ def s3report(htmlReport, account):
         reportName = "cis_report_" + str(account) + "_" + str(datetime.now().strftime('%Y%m%d_%H%M')) + ".html"
     else:
         reportName = "cis_report.html"
-    with tempfile.NamedTemporaryFile() as f:
+    with tempfile.NamedTemporaryFile(delete=False) as f:
         for item in htmlReport:
             f.write(item)
             f.flush()
         try:
+            f.close()
             S3_CLIENT.upload_file(f.name, S3_WEB_REPORT_BUCKET, reportName)
-        except Exception, e:
+            os.unlink(f.name)
+        except Exception as e:
             return "Failed to upload report to S3 because: " + str(e)
     ttl = int(S3_WEB_REPORT_EXPIRE) * 60
     signedURL = S3_CLIENT.generate_presigned_url(
